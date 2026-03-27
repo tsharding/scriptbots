@@ -2,6 +2,7 @@
 #define WORLD_H
 
 #include "Agent.h"
+#include "SpatialGrid.h"
 #include "settings.h"
 #include <vector>
 #include <string>
@@ -75,6 +76,9 @@ private:
     int idcounter;
     
     std::vector<Agent> agents;
+    
+    // Spatial grid for efficient neighbor queries
+    SpatialGrid* spatialGrid;
     
     // food
     int FW;

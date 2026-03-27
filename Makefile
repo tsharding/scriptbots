@@ -5,7 +5,7 @@ OPENGL_FLAGS = -lGL -lGLU
 OPENMP_FLAGS = -fopenmp
 
 # Source files
-SOURCES = GLView.cpp StatsWindow.cpp main.cpp MLPBrain.cpp Agent.cpp World.cpp vmath.cpp Config.cpp
+SOURCES = GLView.cpp StatsWindow.cpp main.cpp MLPBrain.cpp Agent.cpp World.cpp vmath.cpp Config.cpp SpatialGrid.cpp
 
 # Object files
 OBJECTS = $(SOURCES:.cpp=.o)

@@ -95,6 +95,12 @@ void MLPBrain::tick(vector< float >& in, vector< float >& out)
         for (int j=0;j<conf::CONNS();j++) {
             int idx=abox->id[j];
             int type = abox->type[j];
+            
+            // Bounds check to prevent crash
+            if (idx < 0 || idx >= (int)boxes.size()) {
+                continue; // Skip invalid connections
+            }
+            
             float val= boxes[idx].out;
             
             if(type==1){
@@ -126,7 +132,15 @@ void MLPBrain::tick(vector< float >& in, vector< float >& out)
 
     //finally set out[] to the last few boxes output
     for (int i=0;i<conf::OUTPUTSIZE();i++) {
-        out[i]= boxes[conf::BRAINSIZE()-1-i].out;
+        int output_idx = conf::BRAINSIZE()-1-i;
+        
+        // Bounds check for output assignment
+        if (output_idx < 0 || output_idx >= (int)boxes.size()) {
+            out[i] = 0.0f; // Default to 0 for invalid indices
+            continue;
+        }
+        
+        out[i]= boxes[output_idx].out;
     }
 }
 

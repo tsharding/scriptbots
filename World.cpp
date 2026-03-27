@@ -19,6 +19,11 @@ World::World() :
         FH(conf::HEIGHT()/conf::CZ()),
         CLOSED(conf::INITIAL_CLOSED_ENVIRONMENT())
 {
+    // Initialize spatial grid for efficient neighbor queries
+    // Cell size should be roughly the interaction distance for optimal performance
+    float cellSize = conf::DIST() * 0.8f; // Slightly smaller than vision distance
+    spatialGrid = new SpatialGrid(conf::WIDTH(), conf::HEIGHT(), cellSize);
+    
     // Initialize food layer
     food.resize(FW, std::vector<float>(FH, 0));
     
@@ -40,6 +45,10 @@ World::World() :
     
     numCarnivore.resize(200, 0);
     numHerbivore.resize(200, 0);
+}
+
+World::~World() {
+    delete spatialGrid;
 }
 
 void World::update()
@@ -103,11 +112,13 @@ void World::update()
             saveToFile(autosaveName);
             printf("Auto-saved simulation state to %s\n", autosaveName.c_str());
         }
-        if (modcounter%conf::FOODADDFREQ()==0) {
-            fx=randi(0,FW);
-            fy=randi(0,FH);
-            food[fx][fy]= conf::FOODMAX();
-        }
+    }
+    
+    // Food addition - happens at the configured frequency
+    if (modcounter%conf::FOODADDFREQ()==0) {
+        fx=randi(0,FW);
+        fy=randi(0,FH);
+        food[fx][fy]= conf::FOODMAX();
     }
     
     //reset any counter variables per agent
@@ -189,6 +200,8 @@ void World::update()
     vector<Agent>::iterator iter= agents.begin();
     while (iter != agents.end()) {
         if (iter->health <=0) {
+            // Remove from spatial grid before erasing from vector
+            spatialGrid->removeAgent(&(*iter));
             iter= agents.erase(iter);
         } else {
             ++iter;
@@ -260,6 +273,9 @@ void World::setInputs()
     float PI38= 3*PI8; //3pi/8/2
     float PI4= M_PI/4;
     
+    // Temporary vector to store nearby agents (reused for efficiency)
+    std::vector<Agent*> nearbyAgents;
+    
     for (int i=0;i<agents.size();i++) {
         Agent* a= &agents[i];
 
@@ -284,12 +300,11 @@ void World::setInputs()
         //BLOOD ESTIMATOR
         float blood= 0;
 
-        for (int j=0;j<agents.size();j++) {
-            if (i==j) continue;
-            Agent* a2= &agents[j];
-
-                        if (a->pos.x<a2->pos.x-conf::DIST() || a->pos.x>a2->pos.x+conf::DIST()
-                || a->pos.y>a2->pos.y+conf::DIST() || a->pos.y<a2->pos.y-conf::DIST()) continue;
+        // Use spatial grid to get nearby agents instead of checking all agents
+        spatialGrid->getNearbyAgents(a->pos.x, a->pos.y, conf::DIST(), nearbyAgents);
+        
+        for (Agent* a2 : nearbyAgents) {
+            if (a == a2) continue; // Skip self
 
             float d= (a->pos-a2->pos).length();
 
@@ -334,7 +349,7 @@ void World::setInputs()
                 if (diff4<PI38) {
                     float mul4= ((PI38-diff4)/PI38)*((conf::DIST()-d)/conf::DIST());
                     //if we can see an agent close with both eyes in front of us
-                    blood+= mul4*(1-agents[j].health/2); //remember: health is in [0 2]
+                    blood+= mul4*(1-a2->health/2); //remember: health is in [0 2]
                     //agents with high life dont bleed. low life makes them bleed more
                 }
             }
@@ -404,6 +419,10 @@ void World::processOutputs()
     for (int i=0;i<agents.size();i++) {
         Agent* a= &agents[i];
 
+        // Store old position for spatial grid update
+        float oldX = a->pos.x;
+        float oldY = a->pos.y;
+
         Vector2f v(conf::BOTRADIUS()/2, 0);
         v.rotate(a->angle + M_PI/2);
 
@@ -436,6 +455,9 @@ void World::processOutputs()
         if (a->pos.x>=conf::WIDTH()) a->pos.x= a->pos.x-conf::WIDTH();
         if (a->pos.y<0) a->pos.y= conf::HEIGHT()+a->pos.y;
         if (a->pos.y>=conf::HEIGHT()) a->pos.y= a->pos.y-conf::HEIGHT();
+        
+        // Update spatial grid with new position
+        spatialGrid->updateAgent(a, oldX, oldY);
     }
 
     //process food intake for herbivors
@@ -461,13 +483,19 @@ void World::processOutputs()
     }
     for (int i=0;i<agents.size();i++) {
         if (agents[i].give>0.5) {
-            for (int j=0;j<agents.size();j++) {
-                float d= (agents[i].pos-agents[j].pos).length();
+            // Use spatial grid for food sharing instead of checking all agents
+            std::vector<Agent*> nearbyForFood;
+            spatialGrid->getNearbyAgents(agents[i].pos.x, agents[i].pos.y, conf::FOOD_SHARING_DISTANCE(), nearbyForFood);
+            
+            for (Agent* a2 : nearbyForFood) {
+                if (&agents[i] == a2) continue; // Skip self
+                
+                float d= (agents[i].pos-a2->pos).length();
                 if (d<conf::FOOD_SHARING_DISTANCE()) {
                     //initiate transfer
-                    if (agents[j].health<2) agents[j].health += conf::FOODTRANSFER();
+                    if (a2->health<2) a2->health += conf::FOODTRANSFER();
                     agents[i].health -= conf::FOODTRANSFER();
-                    agents[j].dfood += conf::FOODTRANSFER(); //only for drawing
+                    a2->dfood += conf::FOODTRANSFER(); //only for drawing
                     agents[i].dfood -= conf::FOODTRANSFER();
                 }
             }
@@ -476,45 +504,51 @@ void World::processOutputs()
 
     //process spike dynamics for carnivors
     if (modcounter%2==0) { //we dont need to do this TOO often. can save efficiency here since this is n^2 op in #agents
+        // Temporary vector to store collision candidates (reused for efficiency)
+        std::vector<Agent*> collisionCandidates;
+        
         for (int i=0;i<agents.size();i++) {
 
             //NOTE: herbivore cant attack. TODO: hmmmmm
             //fot now ok: I want herbivores to run away from carnivores, not kill them back
             if(agents[i].herbivore>0.8 || agents[i].spikeLength<0.2 || agents[i].w1<0.5 || agents[i].w2<0.5) continue; 
             
-            for (int j=0;j<agents.size();j++) {
+            // Use spatial grid to get nearby agents for collision detection
+            spatialGrid->getNearbyAgents(agents[i].pos.x, agents[i].pos.y, 2*conf::BOTRADIUS(), collisionCandidates);
+            
+            for (Agent* a2 : collisionCandidates) {
+                if (&agents[i] == a2) continue; // Skip self
                 
-                if (i==j) continue;
-                float d= (agents[i].pos-agents[j].pos).length();
+                float d= (agents[i].pos-a2->pos).length();
 
                 if (d<2*conf::BOTRADIUS()) {
                     //these two are in collision and agent i has extended spike and is going decent fast!
                     Vector2f v(1,0);
                     v.rotate(agents[i].angle);
-                    float diff= v.angle_between(agents[j].pos-agents[i].pos);
+                    float diff= v.angle_between(a2->pos-agents[i].pos);
                     if (fabs(diff)<M_PI/8) {
                         //bot i is also properly aligned!!! that's a hit
                         float mult=1;
                         if (agents[i].boost) mult= conf::BOOSTSIZEMULT();
                         float DMG= conf::SPIKEMULT()*agents[i].spikeLength*max(fabs(agents[i].w1),fabs(agents[i].w2))*conf::BOOSTSIZEMULT();
 
-                        agents[j].health-= DMG;
+                        a2->health-= DMG;
 
                         if (agents[i].health>2) agents[i].health=2; //cap health at 2
                         agents[i].spikeLength= 0; //retract spike back down
 
-                        agents[i].initEvent(40*DMG,1,1,0); //yellow event means bot has spiked other bot. nice!
+                        agents[i].initEvent(10*DMG,1,1,0); //yellow event means bot has spiked other bot. nice!
 
                         Vector2f v2(1,0);
-                        v2.rotate(agents[j].angle);
+                        v2.rotate(a2->angle);
                         float adiff= v.angle_between(v2);
                         if (fabs(adiff)<M_PI/2) {
                             //this was attack from the back. Retract spike of the other agent (startle!)
                             //this is done so that the other agent cant right away "by accident" attack this agent
-                            agents[j].spikeLength= 0;
+                            a2->spikeLength= 0;
                         }
                         
-                        agents[j].spiked= true; //set a flag saying that this agent was hit this turn
+                        a2->spiked= true; //set a flag saying that this agent was hit this turn
                     }
                 }
             }
@@ -537,6 +571,9 @@ void World::addRandomBots(int num)
         a.id= idcounter;
         idcounter++;
         agents.push_back(a);
+        
+        // Add new agent to spatial grid
+        spatialGrid->addAgent(&agents.back());
         
         // Track agent creation for lineage statistics
         if (STATSWINDOW) {

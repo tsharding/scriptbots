@@ -85,9 +85,9 @@ int main(int argc, char **argv) {
     // Load configuration
     if (!g_config.load()) {
         printf("Warning: Could not load configuration file. Using default values.\n");
-        // Cache default values even if file loading failed
-        g_config.cacheValues();
     }
+    // Cache values from loaded config (or defaults if loading failed)
+    g_config.cacheValues();
     
     if (conf::WIDTH()%conf::CZ()!=0 || conf::HEIGHT()%conf::CZ()!=0) printf("CAREFUL! The cell size variable conf::CZ should divide evenly into both conf::WIDTH and conf::HEIGHT! It doesn't right now!");
     

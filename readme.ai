@@ -1,0 +1,982 @@
+# ScriptBots Simulation: Complete Technical Specification
+
+## Executive Summary
+
+ScriptBots is an artificial life simulation featuring autonomous agents with evolving neural networks. Agents compete for resources in a 2D world, developing behaviors through evolutionary pressures. The simulation implements a complete ecosystem with predator-prey dynamics, genetic algorithms, and emergent behavior patterns.
+
+## Architecture Overview
+
+The simulation follows a modular design with clear separation between simulation logic, rendering, and configuration. The core architecture consists of:
+
+- **Simulation Engine**: World-centric simulation loop with agent management
+- **Neural Architecture**: Custom recurrent neural networks with evolutionary capabilities  
+- **Spatial Optimization**: Grid-based spatial partitioning for O(N) neighbor queries
+- **Rendering System**: OpenGL-based dual-window visualization
+- **Configuration System**: Runtime-configurable parameters with type safety
+- **Persistence Layer**: Binary serialization with version compatibility
+
+## Core Simulation Loop
+
+### Main Application (`main.cpp`)
+
+**Entry Point & Initialization**:
+- Initializes random seed with `srand(time(0))`
+- Loads configuration from `scriptbots.conf` via `g_config.load()`
+- Creates `World` instance with initial agent population
+- Establishes dual-window OpenGL context (main view + statistics)
+- Calculates optimal window positioning based on screen dimensions
+- Enters `glutMainLoop()` for event-driven simulation
+
+**Window Management**:
+- Main window: World visualization with agent rendering and interaction
+- Stats window: Real-time metrics, population charts, lineage tracking
+- Cross-window keyboard event handling for unified control
+
+**Command Line Interface**:
+- `--help`: Display usage information and controls
+- `--version`: Show version with build tag
+- `--load <filename>`: Initialize simulation from saved state
+
+### World Simulation Engine (`World.h`, `World.cpp`)
+
+**Primary Responsibilities**:
+- Manages complete simulation state and temporal progression
+- Coordinates agent lifecycle (birth, aging, death, reproduction)
+- Implements resource management (food generation/consumption)
+- Handles spatial partitioning updates
+- Manages save/load operations with versioned binary format
+
+**Core Data Structures**:
+```cpp
+class World {
+    std::vector<Agent> agents;              // All simulation entities
+    std::vector<std::vector<float>> food;   // 2D food distribution grid
+    SpatialGrid* spatialGrid;               // Spatial optimization structure
+    int modcounter, current_epoch, idcounter; // Temporal tracking
+    std::vector<int> numHerbivore, numCarnivore; // Population history
+    bool CLOSED;                            // Environment boundary condition
+}
+```
+
+**Simulation Tick Sequence (`World::update()`)**:
+
+1. **Temporal Management**:
+   - Increment `modcounter` (tick counter)
+   - Every 100 ticks: Age all agents (`agents[i].age += 1`)
+   - Every 1000 ticks: Update population history arrays
+   - Every 10000 ticks: Increment epoch, trigger epoch events
+
+2. **Epoch-Level Events**:
+   - Random agent spawning (configurable interval)
+   - Population extinction handling (automatic repopulation)
+   - Autosave functionality (configurable frequency)
+
+3. **Agent Processing Pipeline**:
+   - Reset per-tick flags (`spiked = false`)
+   - `setInputs()`: Populate agent sensor data
+   - `brainsTick()`: Execute neural network forward pass
+   - `processOutputs()`: Interpret neural outputs as actions
+
+4. **Health & Survival**:
+   - Apply base metabolic cost: `health -= 0.0002`
+   - Boost penalty: `health -= baseloss * BOOSTSIZEMULT * 1.3`
+   - Remove agents with `health <= 0`
+   - Distribute deceased agent biomass to nearby agents
+
+5. **Reproduction Cycle**:
+   - Check reproduction readiness: `repcounter < 0 && health > 0.65`
+   - Probabilistic reproduction trigger (10% chance per eligible tick)
+   - Generate offspring via `reproduce()` with mutation
+   - Reset reproduction counter based on herbivore/carnivore type
+
+6. **Population Maintenance** (if not closed environment):
+   - Maintain minimum population of `conf::NUMBOTS()`
+   - Random agent injection (50% random, 50% crossover)
+
+**Food System**:
+- Grid-based food distribution: `food[FW][FH]` where `FW = WIDTH/CZ`, `FH = HEIGHT/CZ`
+- Periodic food addition: Every `FOODADDFREQ` ticks at random location
+- Food consumption: Herbivores consume `FOODINTAKE * herbivore * speedmul`
+- Food waste factor: `FOODWASTE` amount destroyed per consumption event
+
+**Agent Input Processing (`setInputs()`)**:
+
+Constructs 24-element input vector for each agent:
+- **Indices 0-3**: Eye 1 (proximity, red, green, blue)
+- **Index 4**: Ground food level
+- **Indices 5-8**: Eye 2 (proximity, red, green, blue)  
+- **Index 9**: Sound accumulator (movement-based noise from neighbors)
+- **Index 10**: Smell accumulator (proximity-weighted presence)
+- **Index 11**: Health level (normalized to [0,1])
+- **Indices 12-15**: Eye 3 (proximity, red, green, blue)
+- **Indices 16-17**: Clock signals (`sin(modcounter/clockf1)`, `sin(modcounter/clockf2)`)
+- **Index 18**: Hearing accumulator (sound output from neighbors)
+- **Index 19**: Blood sensor (forward-facing health detector)
+- **Indices 20-23**: Eye 4 (proximity, red, green, blue)
+
+**Vision System**:
+- Each agent has 4 configurable eyes with individual direction and field-of-view
+- Eye input calculation: `mul1 = eyesensmod * (fabs(fov-diff1)/fov) * ((DIST-d)/DIST)`
+- Color accumulation: `r[eye] += mul1 * neighbor.red`
+- Proximity: `p[eye] += mul1 * (d/DIST)` (distance-normalized)
+
+**Agent Output Processing (`processOutputs()`)**:
+
+Interprets 9-element output vector:
+- **Index 0**: Left wheel speed (`w1`)
+- **Index 1**: Right wheel speed (`w2`)  
+- **Index 2**: Red color component
+- **Index 3**: Green color component
+- **Index 4**: Blue color component
+- **Index 5**: Spike length (attack mechanism)
+- **Index 6**: Boost activation (speed multiplier)
+- **Index 7**: Sound multiplier (noise generation)
+- **Index 8**: Food giving behavior
+
+**Movement Physics**:
+```cpp
+// Differential drive model
+Vector2f v(BOTRADIUS/2, 0);
+v.rotate(agent.angle + M_PI/2);
+Vector2f w1p = agent.pos + v;  // Left wheel position
+Vector2f w2p = agent.pos - v;  // Right wheel position
+
+float BW1 = BOTSPEED * agent.w1 * boost_multiplier;
+float BW2 = BOTSPEED * agent.w2 * boost_multiplier;
+
+// Update position and orientation via differential steering
+```
+
+**Combat System**:
+- Spike extension: `spikeLength` approaches `out[5]` at rate `SPIKESPEED`
+- Attack conditions: Non-herbivore, extended spike, forward movement
+- Damage calculation: `DMG = SPIKEMULT * spikeLength * max(|w1|,|w2|) * BOOSTSIZEMULT`
+- Collision detection: `distance < 2*BOTRADIUS` with angular alignment check
+- Back-attack advantage: Resets victim's spike to prevent immediate retaliation
+
+## Agent Architecture (`Agent.h`, `Agent.cpp`)
+
+### Agent State Structure
+
+**Core Attributes**:
+```cpp
+class Agent {
+    Vector2f pos;                    // World coordinates
+    float health;                    // Range [0,2], death at 0
+    float angle;                     // Orientation in radians
+    float red, gre, blu;            // Color phenotype [0,1]
+    float w1, w2;                   // Wheel speeds [-1,1]
+    bool boost;                     // Speed multiplier active
+    float spikeLength;              // Attack appendage [0,1]
+    int age;                        // Ticks since birth
+    
+    // Neural interface
+    std::vector<float> in, out;     // Neural I/O vectors
+    MLPBrain brain;                 // Neural network instance
+    
+    // Genetic traits
+    float herbivore;                // Diet type [0=carnivore, 1=herbivore]
+    float MUTRATE1, MUTRATE2;       // Self-modifying mutation rates
+    std::vector<float> eyefov, eyedir; // Eye configuration
+    float smellmod, soundmod, hearmod, eyesensmod, bloodmod; // Sensor gains
+    
+    // Reproduction
+    float repcounter;               // Countdown to reproduction eligibility
+    int gencount;                   // Generation number
+    bool hybrid;                    // Crossover offspring flag
+    
+    // Lineage tracking
+    std::string lineageTag;         // 5-character lineage identifier
+    int id;                         // Unique agent identifier
+}
+```
+
+**Agent Initialization**:
+- Random world position: `pos = (randf(0,WIDTH), randf(0,HEIGHT))`
+- Initial health: `1.0 + randf(0,0.1)`
+- Random orientation: `angle = randf(-π,π)`
+- Diet assignment: `herbivore = randf(0,1)`
+- Mutation rates: `MUTRATE1 ∈ [0.001,0.005]`, `MUTRATE2 ∈ [0.03,0.07]`
+- Clock frequencies: `clockf1,clockf2 ∈ [5,100]`
+- Sensory modifiers: Individual random ranges for each sensor type
+- Eye configuration: Random FOV and direction for each of 4 eyes
+- Lineage tag: 5-character random string (`generateLineageTag()`)
+
+### Reproduction Mechanisms
+
+**Asexual Reproduction (`Agent::reproduce()`)**:
+
+1. **Offspring Positioning**:
+   ```cpp
+   Vector2f fb(BOTRADIUS, 0);
+   fb.rotate(-offspring.angle);
+   offspring.pos = parent.pos + fb + random_offset;
+   ```
+
+2. **Genetic Inheritance**:
+   - Generation increment: `offspring.gencount = parent.gencount + 1`
+   - Reproduction timer reset based on diet type
+   - Meta-mutation: 10% chance to modify `MUTRATE1/MUTRATE2`
+
+3. **Trait Mutation** (5 * MUTRATE1 probability each):
+   - Diet shift: `herbivore += randn(0, MUTRATE2)`
+   - Clock frequency drift: `clockf1/clockf2 += randn(0, MUTRATE2)`
+   - Sensory parameter mutation: All sensor modifiers
+   - Eye reconfiguration: FOV and direction per eye
+   - Neural network mutation: `brain.mutate(MUTRATE1, MUTRATE2)`
+
+4. **Lineage Preservation**: `offspring.lineageTag = parent.lineageTag`
+
+**Sexual Reproduction (`Agent::crossover()`)**:
+
+1. **Parent Selection**: Choose traits randomly from each parent (50/50 probability)
+2. **Trait Inheritance**:
+   - Scalar traits: Binary selection from parents
+   - Vector traits: Complete inheritance from selected parent
+   - Neural network: `MLPBrain::crossover()` with neuron-level selection
+3. **Lineage Assignment**: Random selection from parent lineage tags
+4. **Generation Assignment**: Minimum of parent generation counts
+5. **Hybrid Flag**: `offspring.hybrid = true`
+
+### Agent Lifecycle Events
+
+**Death Conditions**:
+- Health depletion: `health <= 0`
+- Combat damage: Spike attacks reduce health
+- Metabolic drain: Continuous energy loss
+
+**Death Processing**:
+- Biomass distribution to nearby agents (carnivore nutrition bonus)
+- Age-based nutrition scaling: Agents < 5 ticks old provide minimal biomass
+- Spatial grid removal: `spatialGrid->removeAgent()`
+- Lineage extinction tracking: Population monitoring for statistics
+
+## Neural Network Architecture (`MLPBrain.h`, `MLPBrain.cpp`)
+
+### Network Topology
+
+**MLPBox (Neuron) Structure**:
+```cpp
+class MLPBox {
+    std::vector<float> w;           // Connection weights
+    std::vector<int> id;            // Target neuron indices  
+    std::vector<int> type;          // Synapse types (0=normal, 1=change-sensitive)
+    float kp;                       // Damping coefficient [0.01,1.0]
+    float gw;                       // Global weight multiplier [0,5]
+    float bias;                     // Neuron bias [-2,2]
+    
+    // State variables
+    float target, out, oldout;      // Activation dynamics
+}
+```
+
+**Network Architecture**:
+- **Input Layer**: First `INPUTSIZE` (24) neurons receive sensor data
+- **Hidden Layer**: `BRAINSIZE - INPUTSIZE - OUTPUTSIZE` neurons (configurable)
+- **Output Layer**: Last `OUTPUTSIZE` (9) neurons control actions
+- **Connectivity**: Each neuron has `CONNS` (4) outgoing connections
+- **Recurrent Structure**: Neurons can connect to any other neuron, including themselves
+
+### Neural Dynamics
+
+**Activation Function**: Standard sigmoid: `σ(x) = 1/(1 + e^(-x))`
+
+**Forward Pass (`MLPBrain::tick()`)**:
+
+1. **Input Assignment**: `boxes[i].out = in[i]` for i < INPUTSIZE
+
+2. **Hidden Layer Update**:
+   ```cpp
+   for (neuron i in [INPUTSIZE, BRAINSIZE)) {
+       float acc = 0;
+       for (connection j in CONNS) {
+           int target_idx = neuron.id[j];
+           float val = boxes[target_idx].out;
+           
+           if (neuron.type[j] == 1) {  // Change-sensitive synapse
+               val = (val - boxes[target_idx].oldout) * 10;
+           }
+           
+           acc += val * neuron.w[j];
+       }
+       acc = acc * neuron.gw + neuron.bias;
+       neuron.target = σ(acc);
+   }
+   ```
+
+3. **State Backup**: `boxes[i].oldout = boxes[i].out`
+
+4. **Temporal Integration**: `boxes[i].out += (target - out) * kp`
+
+5. **Output Extraction**: `out[i] = boxes[BRAINSIZE-1-i].out`
+
+**Change-Sensitive Synapses**:
+- 5% of connections are change-sensitive (`type = 1`)
+- Input: `(current_activation - previous_activation) * 10`
+- Enables temporal pattern detection and sequence learning
+
+### Neural Evolution
+
+**Mutation Operations (`MLPBrain::mutate()`)**:
+
+For each neuron (probability MUTRATE1):
+1. **Bias Drift**: `bias += randn(0, MUTRATE2)`
+2. **Damping Adjustment**: `kp += randn(0, MUTRATE2)`, clamped to [0.01,1.0]
+3. **Global Weight Scaling**: `gw += randn(0, MUTRATE2)`, clamped to [0,∞)
+4. **Connection Weight Mutation**: Random connection weight += randn(0, MUTRATE2)
+5. **Synapse Type Flip**: Random connection type toggle (0↔1)
+6. **Connectivity Rewiring**: Random connection target reassignment
+
+**Crossover Operation (`MLPBrain::crossover()`)**:
+- Neuron-level inheritance: Each neuron inherited completely from one parent
+- 50% probability selection per neuron
+- Preserves neural architecture while mixing learned behaviors
+
+### Neural Initialization
+
+**Connection Setup**:
+- Random weight initialization: `w[i] ∈ [-3,3]`
+- 50% sparsity: Half of connections set to zero
+- Input bias: 20% of connections target input layer
+- Random connectivity: 80% connect to arbitrary neurons
+- Synapse type: 5% change-sensitive, 95% standard
+
+**Parameter Ranges**:
+- Damping: `kp ∈ [0.9,1.1]`
+- Global weight: `gw ∈ [0,5]`  
+- Bias: `bias ∈ [-2,2]`
+
+## Spatial Optimization (`SpatialGrid.h`, `SpatialGrid.cpp`)
+
+### Grid Structure
+
+**Purpose**: Reduce neighbor-finding complexity from O(N²) to O(N) for N agents
+
+**Implementation**:
+```cpp
+class SpatialGrid {
+    std::vector<std::vector<std::vector<Agent*>>> grid;  // 3D: [x][y][agents]
+    std::unordered_map<Agent*, std::pair<int,int>> agentCellMap; // Fast lookup
+    float worldWidth, worldHeight, cellSize;
+    int gridWidth, gridHeight;
+}
+```
+
+**Grid Dimensions**:
+- Cell size: Optimal at ~80% of agent vision distance (`DIST * 0.8`)
+- Grid resolution: `gridWidth = ceil(worldWidth/cellSize)`
+- Total cells: `gridWidth × gridHeight`
+
+### Spatial Operations
+
+**Agent Management**:
+1. **`addAgent()`**: Insert agent into appropriate grid cell
+2. **`removeAgent()`**: Remove from current cell using hash map lookup
+3. **`updateAgent()`**: Move between cells when agent position changes
+
+**Neighbor Queries**:
+```cpp
+void getNearbyAgents(float x, float y, float radius, vector<Agent*>& result) {
+    // Calculate bounding box in grid coordinates
+    int minGx = getGridX(x - radius);
+    int maxGx = getGridX(x + radius);
+    int minGy = getGridY(y - radius);  
+    int maxGy = getGridY(y + radius);
+    
+    // Check all cells in bounding box
+    for (int gx = minGx; gx <= maxGx; gx++) {
+        for (int gy = minGy; gy <= maxGy; gy++) {
+            // Handle world wrapping
+            int wrappedGx = ((gx % gridWidth) + gridWidth) % gridWidth;
+            int wrappedGy = ((gy % gridHeight) + gridHeight) % gridHeight;
+            
+            for (Agent* agent : grid[wrappedGx][wrappedGy]) {
+                // Precise distance check with world wrapping
+                float dx = agent->pos.x - x;
+                float dy = agent->pos.y - y;
+                
+                if (dx > worldWidth/2) dx -= worldWidth;
+                else if (dx < -worldWidth/2) dx += worldWidth;
+                if (dy > worldHeight/2) dy -= worldHeight;
+                else if (dy < -worldHeight/2) dy += worldHeight;
+                
+                if (sqrt(dx*dx + dy*dy) <= radius) {
+                    result.push_back(agent);
+                }
+            }
+        }
+    }
+}
+```
+
+**World Wrapping Support**:
+- Toroidal topology: Agents wrap around world boundaries
+- Distance calculation accounts for shortest path across boundaries
+- Grid coordinates handle negative indices via modular arithmetic
+
+## Configuration System (`Config.h`, `Config.cpp`)
+
+### Architecture
+
+**Type-Safe Settings**:
+```cpp
+template<typename T>
+class TypedConfigSetting : public ConfigSetting {
+    T value, defaultValue;
+    T* cachePtr;  // Performance cache pointer
+    
+    virtual T parseValue(const string& str) = 0;
+    virtual string toString(const T& val) const = 0;
+}
+```
+
+**Setting Types**:
+- `IntSetting`: Integer values with bounds checking
+- `FloatSetting`: Floating-point values
+- `BoolSetting`: Boolean with multiple format support (true/false, 1/0, yes/no)
+- `StringSetting`: String values with encoding support
+
+**Configuration Sections**:
+1. **`[world]`**: Dimensions, cell size, window parameters
+2. **`[agent]`**: Population, movement, combat, reproduction
+3. **`[perception]`**: Vision distance, sensor ranges
+4. **`[evolution]`**: Mutation rates, genetic parameters
+5. **`[food]`**: Consumption, distribution, regeneration
+6. **`[simulation]`**: Timing, population control, save/load
+7. **`[neural]`**: Network topology, connection density
+
+### Performance Optimization
+
+**Value Caching**:
+- Hot-path values cached in `conf_cache` namespace
+- Direct memory access via function pointers
+- Load-time cache population via `g_config.cacheValues()`
+- Eliminates map lookups during simulation
+
+**Access Pattern**:
+```cpp
+// Configuration definition
+conf_cache::WIDTH = 4000;  // Cached value
+
+// Runtime access (zero overhead)
+inline int WIDTH() { return conf_cache::WIDTH; }
+```
+
+### File Format
+
+**INI-Style Syntax**:
+```ini
+# Comments start with # or ;
+[section_name]
+key = value
+
+# Example:
+[world]
+width = 4000
+height = 2500
+
+[agent]  
+initial_count = 250
+speed = 0.3
+```
+
+**Version Compatibility**:
+- Save files include configuration snapshot
+- Load operation validates critical parameters
+- Fallback to defaults for missing values
+- Migration support for format changes
+
+## Utility Functions and Mathematics
+
+### Random Number Generation (`helpers.h`)
+
+**Core Functions**:
+- `randf(a,b)`: Uniform random float in [a,b)
+- `randi(a,b)`: Uniform random integer in [a,b)
+- `randn(mu,sigma)`: Normal distribution using Box-Muller transform
+- `cap(a)`: Clamp value to [0,1]
+- `generateLineageTag()`: Create 5-character alphabetic identifier
+
+**Box-Muller Normal Distribution**:
+```cpp
+double randn(double mu, double sigma) {
+    static bool deviateAvailable = false;
+    static float storedDeviate;
+    
+    if (!deviateAvailable) {
+        double var1, var2, rsquared, polar;
+        do {
+            var1 = 2.0 * (rand()/RAND_MAX) - 1.0;
+            var2 = 2.0 * (rand()/RAND_MAX) - 1.0;
+            rsquared = var1*var1 + var2*var2;
+        } while (rsquared >= 1.0 || rsquared == 0.0);
+        
+        polar = sqrt(-2.0 * log(rsquared) / rsquared);
+        storedDeviate = var1 * polar;
+        deviateAvailable = true;
+        return var2 * polar * sigma + mu;
+    } else {
+        deviateAvailable = false;
+        return storedDeviate * sigma + mu;
+    }
+}
+```
+
+### Vector Mathematics (`vmath.h`)
+
+**Vector2f Class**:
+- 2D vector operations for position and velocity
+- Methods: `length()`, `rotate()`, `angle_between()`, `get_angle()`
+- Operator overloading for arithmetic operations
+- Support for both Cartesian (x,y) and texture (s,t) coordinates
+
+**Key Operations**:
+```cpp
+class Vector2f {
+    float x, y;
+    
+    float length() { return sqrt(x*x + y*y); }
+    void rotate(float angle) { /* rotation transformation */ }
+    float get_angle() { return atan2(y, x); }
+    float angle_between(const Vector2f& other) { /* angle calculation */ }
+}
+```
+
+## Visualization System
+
+### OpenGL Rendering (`GLView.h`, `GLView.cpp`)
+
+**Dual-Window Architecture**:
+- **Main Window**: World visualization with agent interactions
+- **Stats Window**: Real-time metrics and lineage tracking
+- Coordinated update cycle with FPS synchronization
+
+**Coordinate System**:
+- World coordinates: Floating-point physics space
+- Screen coordinates: Integer pixel space
+- Transformation pipeline: World → Camera → Screen
+
+**Camera System**:
+```cpp
+class GLView {
+    float scalemult;           // Zoom factor
+    float xtranslate, ytranslate; // Pan offset
+    int windowWidth, windowHeight; // Viewport dimensions
+    
+    // Transform: screen = (world + translate) * scale + center
+}
+```
+
+**Agent Rendering (`drawAgent()`)**:
+
+1. **Base Geometry**: Circle primitive with configurable radius
+2. **Color Coding**: RGB values from neural network outputs
+3. **State Indicators**:
+   - Health bar: Green rectangle proportional to health
+   - Boost state: Red outline when active
+   - Spike visualization: Line extending from agent center
+   - Food transfer: Green/red glow during sharing
+
+4. **Information Overlay** (when enabled):
+   - Generation count and age
+   - Health value (numerical)
+   - Reproduction counter
+   - Lineage tag (5-character ID)
+
+5. **Selection Highlight**: Yellow circle for clicked agents
+
+6. **Neural Network Visualization**:
+   - Input vector: Grayscale squares showing sensor activations
+   - Output vector: Grayscale squares showing motor commands
+   - Brain state: Grid layout of all neuron activations
+
+**Eye Visualization**:
+- Direction lines from agent center
+- Length proportional to FOV
+- Color coding based on eye activation
+
+**Food Rendering (`drawFood()`)**:
+- Grid-based squares aligned to world coordinates
+- Color intensity proportional to food quantity
+- Blue-tinted gradient: Dark blue (empty) → Light blue (full)
+
+**Interactive Features**:
+- Mouse selection: Click to inspect agent details
+- Camera control: Pan (right-drag), zoom (wheel/middle-drag)
+- Follow modes: Track oldest agent or selected agent
+- View toggles: Food display, agent info, neural visualization
+
+### Statistics Window (`StatsWindow.h`, `StatsWindow.cpp`)
+
+**Population Tracking**:
+- Real-time line chart: Herbivore (green) vs Carnivore (red) populations
+- Adaptive Y-axis scaling based on current maximum
+- Historical data buffer: 200 data points
+- Temporal indicator: Vertical line showing current time
+
+**Lineage Analysis**:
+
+1. **Current Top Lineages** (Top 5):
+   - Current population count
+   - All-time maximum population
+   - Total cumulative population
+   - Average generation number
+   - Current maximum age
+   - Historical maximum age
+
+2. **Hall of Fame** (Top 20 all-time):
+   - Emergence time (epoch.tick format)
+   - Extinction time (or "active" status)  
+   - Total population over lifetime
+   - Peak population achieved
+   - Maximum generation reached
+
+**Statistical Metrics**:
+- Current agent counts (total, herbivore, carnivore)
+- Current epoch number
+- Food system status (total food, percentage coverage)
+- Real-time FPS monitoring
+- Lineage diversity (current vs all-time lineage counts)
+
+**Data Persistence**:
+- Lineage statistics saved with simulation state
+- Historical maximum tracking across save/load cycles
+- Extinction event logging with precise timestamps
+
+## Persistence and Serialization
+
+### Save File Format
+
+**Binary Structure**:
+1. **Header**: Magic string "SCRIPTBOTS_SAVE" (15 bytes)
+2. **Version**: Integer version number for compatibility
+3. **Configuration**: Complete simulation parameters
+4. **World State**: Temporal counters, environment status
+5. **Food Grid**: 2D array of food values
+6. **Population History**: Herbivore/carnivore time series
+7. **Agent Data**: Complete agent array with neural networks
+8. **Lineage Tracking**: Statistical data for all lineages
+
+**Versioning Strategy**:
+- Version 1: Original format (no configuration data)
+- Version 2: Added configuration embedding
+- Version 3: Added lineage tracking data
+- Forward compatibility via version detection
+
+**Agent Serialization**:
+```cpp
+void Agent::saveToStream(ofstream& file) const {
+    // Basic properties (position, health, genetic traits)
+    file.write(reinterpret_cast<const char*>(&pos.x), sizeof(pos.x));
+    // ... all scalar members
+    
+    // Variable-length arrays (inputs, outputs, eye configurations)
+    size_t inSize = in.size();
+    file.write(reinterpret_cast<const char*>(&inSize), sizeof(inSize));
+    file.write(reinterpret_cast<const char*>(in.data()), inSize * sizeof(float));
+    
+    // Neural network (delegated to MLPBrain)
+    brain.saveToStream(file);
+    
+    // String data (mutations, lineage tag)
+    // Length-prefixed format for variable strings
+}
+```
+
+**Neural Network Serialization**:
+- Complete connectivity matrix preservation
+- Neuron state (weights, biases, activations)
+- Dynamic array size handling
+- Bounds validation on load
+
+### File Operations
+
+**Auto-Save System**:
+- Configurable frequency (default: every 100 epochs)
+- Filename format: `autosave_epoch_N.sav`
+- Non-blocking operation (minimal simulation interruption)
+
+**Manual Save/Load**:
+- Keyboard shortcuts: 'v' (save), 'l' (load)
+- Intelligent file discovery (most recent save)
+- Error handling with user feedback
+- State validation on load
+
+**Save Directory**: `scriptbots_save_files/` (created automatically)
+
+## Emergent Behaviors and Evolutionary Dynamics
+
+### Selection Pressures
+
+**Resource Competition**:
+- Finite food distribution creates scarcity pressure
+- Spatial clustering around food sources
+- Competition intensity scales with population density
+
+**Predator-Prey Dynamics**:
+- Carnivores gain health from killing other agents
+- Herbivores evolve avoidance behaviors
+- Arms race between attack and defense capabilities
+
+**Reproductive Success**:
+- Health threshold requirement (0.65) for reproduction
+- Reproduction timer prevents excessive breeding
+- Genetic bottlenecks during population crashes
+
+### Evolutionary Adaptations
+
+**Behavioral Evolution**:
+- Movement patterns: Foraging vs fleeing strategies
+- Social behaviors: Cooperation vs competition
+- Temporal activity: Clock-based behavioral cycles
+
+**Sensory Evolution**:
+- Eye configuration optimization (direction, FOV)
+- Sensor gain tuning (smell, sound, blood detection)
+- Attention allocation across sensory channels
+
+**Neural Architecture Evolution**:
+- Connection topology optimization
+- Synapse type distribution (standard vs change-sensitive)
+- Temporal dynamics via damping parameter evolution
+
+**Metabolic Adaptations**:
+- Diet specialization (herbivore parameter evolution)
+- Energy efficiency (movement cost optimization)
+- Boost usage strategies
+
+### Lineage Tracking and Analysis
+
+**Genetic Lineages**:
+- 5-character alpha tags for lineage identification
+- Inheritance through reproduction (sexual and asexual)
+- Extinction tracking with precise timestamps
+
+**Evolutionary Metrics**:
+- Generation depth (maximum generations achieved)
+- Population success (peak and total population)
+- Temporal persistence (emergence to extinction duration)
+- Genetic diversity (number of active lineages)
+
+**Fitness Landscapes**:
+- Multi-objective optimization: Survival, reproduction, resource acquisition
+- Frequency-dependent selection (carnivore/herbivore balance)
+- Spatial heterogeneity effects
+
+## Mathematical Models and Algorithms
+
+### Population Dynamics
+
+**Logistic Growth Model** (when resources are abundant):
+```
+dN/dt = rN(1 - N/K)
+```
+Where:
+- N = population size
+- r = intrinsic growth rate (reproduction rate - death rate)
+- K = carrying capacity (resource-dependent)
+
+**Predator-Prey Oscillations** (Lotka-Volterra-inspired):
+```
+dH/dt = αH - βHC
+dC/dt = δβHC - γC
+```
+Where:
+- H = herbivore population
+- C = carnivore population  
+- α = herbivore growth rate
+- β = predation rate
+- δ = predation efficiency
+- γ = carnivore death rate
+
+### Spatial Distribution
+
+**Agent Density Function**:
+```
+ρ(x,y,t) = Σᵢ δ(x - xᵢ(t), y - yᵢ(t))
+```
+
+**Food Distribution Dynamics**:
+```
+∂F(x,y,t)/∂t = S(x,y) - C(x,y,t) + D∇²F(x,y,t)
+```
+Where:
+- F(x,y,t) = food density at location (x,y) and time t
+- S(x,y) = food source term (periodic addition)
+- C(x,y,t) = consumption rate (agent-dependent)
+- D = diffusion coefficient (if implemented)
+
+### Neural Network Mathematics
+
+**Activation Dynamics** (per neuron):
+```
+τ(dv/dt) = -v + f(Σⱼ wⱼxⱼ + b)
+```
+Where:
+- v = neuron activation
+- τ = time constant (related to kp)
+- f() = sigmoid activation function
+- wⱼ = synaptic weights
+- xⱼ = input activations
+- b = bias term
+
+**Change-Sensitive Synapses**:
+```
+x'ⱼ = k(xⱼ(t) - xⱼ(t-1))
+```
+Where k = 10 (amplification factor)
+
+### Genetic Algorithm Parameters
+
+**Mutation Rate Evolution**:
+```
+MUTRATE1(t+1) = MUTRATE1(t) + N(0, METAMUTRATE1)
+MUTRATE2(t+1) = MUTRATE2(t) + N(0, METAMUTRATE2)
+```
+
+**Fitness Function** (implicit):
+```
+F(agent) = ∫₀ᵀ [survival(t) + reproduction_success(t)] dt
+```
+
+## Performance Characteristics
+
+### Computational Complexity
+
+**Per-Tick Operations**:
+- Agent updates: O(N) where N = number of agents
+- Spatial grid updates: O(N) amortized
+- Neural network forward pass: O(N × BRAINSIZE × CONNS)
+- Neighbor queries: O(N × local_density) average case
+- Food system: O(food_grid_size) = O(WIDTH × HEIGHT / CZ²)
+
+**Memory Usage**:
+- Per agent: ~2KB (neural network dominant)
+- Food grid: 4 bytes × (WIDTH/CZ) × (HEIGHT/CZ)
+- Spatial grid: Minimal overhead (pointers only)
+- Total for 1000 agents: ~2MB base + food grid
+
+**Bottlenecks**:
+1. Neural network computation (dominant for large populations)
+2. Spatial queries during high density
+3. OpenGL rendering (agent count dependent)
+4. Save/load operations (linear in total state size)
+
+### Optimization Strategies
+
+**Spatial Partitioning**:
+- Grid cell size optimization: 80% of vision distance
+- Lazy spatial updates (only when agents move cells)
+- Bounding box culling for neighbor queries
+
+**Neural Network Efficiency**:
+- Sparse connectivity (50% zero weights)
+- Single-precision floating point
+- Vectorized operations where possible
+- Cached activation patterns
+
+**Rendering Optimization**:
+- Frustum culling (off-screen agent rejection)
+- Level-of-detail scaling (distance-based detail reduction)
+- Batched OpenGL calls
+- Configurable frame rate limiting
+
+## Configuration Parameters Reference
+
+### World Dimensions
+- `world.width` = 4000: World width in pixels
+- `world.height` = 2500: World height in pixels  
+- `world.window_width` = 1500: Display window width
+- `world.window_height` = 1000: Display window height
+- `world.cell_size` = 50: Food grid cell size
+
+### Agent Parameters
+- `agent.initial_count` = 250: Starting population
+- `agent.radius` = 10.0: Agent collision radius
+- `agent.speed` = 0.3: Base movement speed
+- `agent.spike_speed` = 0.005: Attack extension rate
+- `agent.spike_multiplier` = 1.0: Damage scaling factor
+- `agent.babies_per_reproduction` = 2: Offspring count
+- `agent.boost_multiplier` = 2.0: Speed boost factor
+- `agent.herbivore_reproduction_rate` = 7.0: Herbivore breeding cycle
+- `agent.carnivore_reproduction_rate` = 7.0: Carnivore breeding cycle
+
+### Perception System
+- `perception.vision_distance` = 150.0: Maximum sight range
+
+### Evolution Parameters  
+- `evolution.meta_mutation_rate_1` = 0.002: Mutation rate evolution speed
+- `evolution.meta_mutation_rate_2` = 0.05: Mutation magnitude evolution speed
+- `evolution.reproduction_multiplier` = 5.0: Death nutrition bonus
+
+### Food System
+- `food.intake_rate` = 0.005: Consumption per tick
+- `food.waste_rate` = 0.001: Loss during consumption
+- `food.max_per_cell` = 0.75: Maximum food density
+- `food.add_frequency` = 45: Ticks between food additions
+- `food.transfer_rate` = 0.001: Agent-to-agent sharing rate
+- `food.sharing_distance` = 50.0: Sharing interaction range
+- `food.distribution_radius` = 100.0: Death nutrition distribution range
+- `food.initial_fill_proportion` = 0.1: Starting food coverage
+
+### Simulation Control
+- `simulation.autosave_frequency` = 100: Epochs between auto-saves
+- `simulation.random_spawn_epoch_interval` = 10: Random agent injection frequency
+- `simulation.random_spawn_count` = 25: Agents per injection event
+- `simulation.initial_closed_environment` = true: Population control mode
+- `simulation.herbivore_extinction_repopulation_count` = 25: Emergency herbivore spawning
+- `simulation.carnivore_extinction_repopulation_count` = 50: Emergency carnivore spawning
+
+### Neural Network Architecture
+- `neural.input_size` = 24: Sensor input count
+- `neural.output_size` = 9: Motor output count
+- `neural.num_eyes` = 4: Eyes per agent
+- `neural.brain_size` = 85: Total neuron count
+- `neural.connections_per_neuron` = 3: Connectivity density
+
+## Implementation Dependencies
+
+### Required Libraries
+- **OpenGL**: Graphics rendering and window management
+- **GLUT**: Window system integration and event handling
+- **Standard C++ Library**: STL containers, algorithms, I/O
+
+### Platform Requirements
+- **Operating System**: Linux, Windows, macOS (with OpenGL support)
+- **Compiler**: C++11 compatible (GCC, Clang, MSVC)
+- **Graphics**: OpenGL 2.0+ with framebuffer support
+- **Memory**: Minimum 512MB RAM (1GB+ recommended for large populations)
+
+### Build System
+- **Makefile**: Traditional make-based build
+- **Dependencies**: OpenGL development libraries, math library (-lm)
+- **Optimization**: Release builds with -O2 or -O3 recommended
+
+## User Interface and Controls
+
+### Keyboard Commands
+- **ESC**: Exit simulation
+- **p**: Pause/unpause simulation
+- **d**: Toggle drawing (affects simulation speed)
+- **f**: Toggle food visualization
+- **g**: Toggle agent information overlay
+- **v**: Manual save simulation state
+- **l**: Load most recent simulation state
+- **+/-**: Adjust simulation speed
+- **r**: Reset all agents (new random population)
+- **a**: Add 10 crossover agents
+- **q**: Add 10 carnivores
+- **h**: Add 10 herbivores
+- **c**: Toggle closed environment mode
+- **s**: Follow selected agent
+- **o**: Follow oldest agent
+- **j**: Recenter camera view
+
+### Mouse Controls
+- **Left Click**: Select agent for detailed inspection
+- **Right Drag**: Pan camera view
+- **Middle Drag**: Fine zoom control
+- **Mouse Wheel**: Zoom in/out
+- **Scroll**: Navigate in statistics window
+
+This technical specification provides comprehensive documentation for implementing a complete ScriptBots simulation from scratch, including all algorithms, data structures, and behavioral systems necessary to recreate the emergent artificial life dynamics. 

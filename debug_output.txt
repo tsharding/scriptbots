@@ -1,0 +1,65 @@
+ScriptBots v2.0.0+dO50eCW
+ScriptBots now runs in two windows:
+- Main window: World visualization
+- Stats window: Population chart and controls
+Both windows respond to keyboard input.
+Usage: ./scriptbots [--help] [--version] [--load <save_file>]
+  --help: Show this help message and exit
+  --version: Show version information and exit
+  --load <save_file>: Load a save file from the save directory on startup (e.g., manual_save_0.sav)
+Initializing world with 1600 food tiles (10.0% of total tiles)
+Screen dimensions: 4480x1440
+World window position: (1860, 330)
+Stats window position: (3930, 50)
+FOOD: Tick 5 (freq=5): Added food at (17,31), was 0.000 now 0.750
+FOOD: Tick 10 (freq=5): Added food at (17,70), was 0.000 now 0.750
+FOOD: Tick 15 (freq=5): Added food at (147,96), was 0.000 now 0.750
+FOOD: Tick 20 (freq=5): Added food at (39,77), was 0.750 now 0.750
+FOOD: Tick 25 (freq=5): Added food at (62,12), was 0.000 now 0.750
+FOOD: Tick 30 (freq=5): Added food at (111,94), was 0.750 now 0.750
+FOOD: Tick 35 (freq=5): Added food at (135,78), was 0.000 now 0.750
+FOOD: Tick 40 (freq=5): Added food at (52,82), was 0.000 now 0.750
+FOOD: Tick 45 (freq=5): Added food at (44,9), was 0.000 now 0.750
+FOOD: Tick 50 (freq=5): Added food at (23,18), was 0.000 now 0.750
+FOOD: Tick 55 (freq=5): Added food at (46,73), was 0.750 now 0.750
+FOOD: Tick 60 (freq=5): Added food at (47,39), was 0.000 now 0.750
+FOOD: Tick 65 (freq=5): Added food at (158,26), was 0.000 now 0.750
+FOOD: Tick 70 (freq=5): Added food at (45,62), was 0.750 now 0.750
+FOOD: Tick 75 (freq=5): Added food at (104,8), was 0.000 now 0.750
+FOOD: Tick 80 (freq=5): Added food at (148,1), was 0.000 now 0.750
+FOOD: Tick 85 (freq=5): Added food at (51,5), was 0.000 now 0.750
+FOOD: Tick 90 (freq=5): Added food at (71,91), was 0.000 now 0.750
+FOOD: Tick 95 (freq=5): Added food at (141,50), was 0.750 now 0.750
+FOOD: Tick 100 (freq=5): Added food at (128,84), was 0.000 now 0.750
+FOOD: Tick 105 (freq=5): Added food at (114,99), was 0.000 now 0.750
+FOOD: Tick 110 (freq=5): Added food at (30,29), was 0.000 now 0.750
+FOOD: Tick 115 (freq=5): Added food at (90,15), was 0.000 now 0.750
+FOOD: Tick 120 (freq=5): Added food at (24,34), was 0.000 now 0.750
+FOOD: Tick 125 (freq=5): Added food at (4,99), was 0.000 now 0.750
+FOOD: Tick 130 (freq=5): Added food at (4,11), was 0.000 now 0.750
+FOOD: Tick 135 (freq=5): Added food at (73,83), was 0.750 now 0.750
+FOOD: Tick 140 (freq=5): Added food at (50,23), was 0.000 now 0.750
+FOOD: Tick 145 (freq=5): Added food at (2,8), was 0.000 now 0.750
+FOOD: Tick 150 (freq=5): Added food at (85,6), was 0.000 now 0.750
+FOOD: Tick 155 (freq=5): Added food at (108,5), was 0.000 now 0.750
+FOOD: Tick 160 (freq=5): Added food at (68,11), was 0.750 now 0.750
+FOOD: Tick 165 (freq=5): Added food at (111,31), was 0.000 now 0.750
+FOOD: Tick 170 (freq=5): Added food at (102,64), was 0.000 now 0.750
+FOOD: Tick 175 (freq=5): Added food at (154,71), was 0.000 now 0.750
+FOOD: Tick 180 (freq=5): Added food at (40,48), was 0.000 now 0.750
+FOOD: Tick 185 (freq=5): Added food at (22,31), was 0.000 now 0.750
+FOOD: Tick 190 (freq=5): Added food at (70,4), was 0.000 now 0.750
+FOOD: Tick 195 (freq=5): Added food at (26,94), was 0.000 now 0.750
+FOOD: Tick 200 (freq=5): Added food at (150,70), was 0.000 now 0.750
+FOOD: Tick 205 (freq=5): Added food at (45,46), was 0.000 now 0.750
+FOOD: Tick 210 (freq=5): Added food at (113,70), was 0.000 now 0.750
+FOOD: Tick 215 (freq=5): Added food at (110,36), was 0.000 now 0.750
+FOOD: Tick 220 (freq=5): Added food at (94,44), was 0.000 now 0.750
+FOOD: Tick 225 (freq=5): Added food at (4,31), was 0.000 now 0.750
+FOOD: Tick 230 (freq=5): Added food at (90,12), was 0.000 now 0.750
+FOOD: Tick 235 (freq=5): Added food at (29,10), was 0.000 now 0.750
+FOOD: Tick 240 (freq=5): Added food at (143,0), was 0.000 now 0.750
+FOOD: Tick 245 (freq=5): Added food at (42,78), was 0.750 now 0.750
+FOOD: Tick 250 (freq=5): Added food at (136,76), was 0.000 now 0.750
+FOOD: Tick 255 (freq=5): Added food at (61,17), was 0.750 now 0.750
+FOOD: Tick 260 (freq=5): Added food at (16,23), 
